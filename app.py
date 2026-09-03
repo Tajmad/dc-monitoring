@@ -3,9 +3,16 @@ from playwright.sync_api import sync_playwright
 import streamlit as st
 import os
 import sys
+import subprocess
 import re
 
-# Настройка путей для Playwright внутри скомпилированного .exe
+# Автоматическая установка браузера Playwright для облака Streamlit
+try:
+  subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=False)
+except Exception:
+  pass
+
+# Настройка путей для Playwright внутри скомпилированного .exe (если запускается локально)
 if hasattr(sys, '_MEIPASS'):
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(sys._MEIPASS, "ms-playwright")
 else:
