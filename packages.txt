@@ -1,11 +1,10 @@
-libasound2
 libasound2t64
 libgbm1
 libnss3
 libnspr4
-libatk1.0-0
-libatk-bridge2.0-0
-libcups2
+libatk1.0-0t64
+libatk-bridge2.0-0t64
+libcups2t64
 libdrm2
 libxkbcommon0
 libxcomposite1
@@ -14,6 +13,4 @@ libxfixes3
 libxrandr2
 libpango-1.0-0
 libcairo2
-libgtk-3-0
 libx11-xcb1
-libxcb-dri3-0

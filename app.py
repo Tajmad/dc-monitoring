@@ -5,27 +5,24 @@ import sys
 import streamlit as st
 from bs4 import BeautifulSoup
 
+
 # ==================== ИНИЦИАЛИЗАЦИЯ PLAYWRIGHT В ОБЛАКЕ ====================
 @st.cache_resource
 def init_playwright():
-    """Автоматическая установка браузера и его системных зависимостей при старте приложения."""
+    """Автоматическая установка бинарников Chromium при старте приложения."""
     try:
-        subprocess.run([sys.executable, "-m", "playwright", "install-deps", "chromium"], check=False)
-        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=False)
+        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
     except Exception as e:
         st.error(f"Ошибка при инициализации Playwright: {e}")
 
-# Вызов инициализации перед импортом и работой с sync_playwright
+# Вызов инициализации
 init_playwright()
 
 from playwright.sync_api import sync_playwright
 
-# Настройка путей для Playwright внутри скомпилированного .exe (если запускается локально)
-if hasattr(sys, "_MEIPASS"):
+# Настройка путей только для скомпилированного .exe (локально)
+if getattr(sys, "_MEIPASS", False):
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(sys._MEIPASS, "ms-playwright")
-else:
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(current_dir, "ms-playwright")
 
 # Общие флаги запуска браузера Chromium для облачной среды и Linux-контейнеров
 BROWSER_LAUNCH_ARGS = [
