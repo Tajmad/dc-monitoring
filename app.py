@@ -2,8 +2,72 @@ import os
 import re
 import subprocess
 import sys
+from datetime import datetime
 import streamlit as st
 from bs4 import BeautifulSoup
+
+
+# ==================== ВНОСИМ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
+def parse_downtime_minutes(time_str):
+    """Преобразует текстовое время простоя (напр. '4 hours 4 minutes 12 seconds') в минуты."""
+    if not time_str or time_str == "—":
+        return 0
+    
+    time_str = time_str.lower()
+    total_mins = 0
+    
+    days_m = re.search(r"(\d+)\s*day", time_str)
+    hours_m = re.search(r"(\d+)\s*hour", time_str)
+    mins_m = re.search(r"(\d+)\s*min", time_str)
+    
+    if days_m:
+        total_mins += int(days_m.group(1)) * 24 * 60
+    if hours_m:
+        total_mins += int(hours_m.group(1)) * 60
+    if mins_m:
+        total_mins += int(mins_m.group(1))
+        
+    return total_mins
+
+
+def format_overdue(total_mins, allowed_hours):
+    """Форматирует статус просрочки на основе допустимого лимита в часах."""
+    allowed_mins = allowed_hours * 60
+    if total_mins <= allowed_mins:
+        remaining = allowed_mins - total_mins
+        r_hrs = remaining // 60
+        r_mins = remaining % 60
+        if r_hrs > 0:
+            return f"🟢 В норме (осталось {r_hrs} ч {r_mins} мин)"
+        return f"🟢 В норме (осталось {r_mins} мин)"
+    else:
+        overdue = total_mins - allowed_mins
+        o_hrs = overdue // 60
+        o_mins = overdue % 60
+        if o_hrs > 0:
+            return f"🚨 Просрочено на {o_hrs} ч {o_mins} мин"
+        return f"🚨 Просрочено на {o_mins} мин"
+
+
+def parse_ezs_last_conn_mins(last_conn_str):
+    """Парсит дату/время последнего подключения ЭЗС и считывает разницу в минутах."""
+    if not last_conn_str or last_conn_str == "—":
+        return 999999
+    
+    # Обработка формата относительного времени (напр. '2 hours ago', '45 mins ago')
+    if "ago" in last_conn_str.lower() or "назад" in last_conn_str.lower():
+        return parse_downtime_minutes(last_conn_str)
+        
+    # Обработка стандартного формата даты YYYY-MM-DD HH:MM:SS
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%d.%m.%Y %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            dt = datetime.strptime(last_conn_str.strip(), fmt)
+            diff = datetime.now() - dt
+            return int(diff.total_seconds() / 60)
+        except Exception:
+            pass
+            
+    return 0
 
 
 # ==================== ИНИЦИАЛИЗАЦИЯ PLAYWRIGHT В ОБЛАКЕ ====================
@@ -38,14 +102,19 @@ st.set_page_config(
     page_title="Единый мониторинг DC", page_icon="⚡", layout="wide"
 )
 
-# ==================== БОКОВАЯ ПАНЕЛЬ (УПРАВЛЕНИЕ) ====================
+# ==================== БОКОВАЯ ПАНЕЛЬ (НАСТРОЙКИ) ====================
 with st.sidebar:
-    st.header("⚙️ Управление")
-    st.write("Панель контроля приложением.")
-
-    if st.button("🛑 Выключить приложение", type="secondary", key="btn_shutdown"):
-        st.warning("Сервер останавливается...")
-        os._exit(0)  # Полностью завершает процесс python / .exe
+    st.header("⚙️ Настройки")
+    
+    # Настройка порога простоя для парковок
+    offline_threshold = st.number_input(
+        "Минут простоя до Офлайна (Парковки):",
+        min_value=1,
+        max_value=1440,
+        value=10,
+        step=5,
+        help="Если устройство не отправляет данные дольше указанного количества минут, оно считается аварийным."
+    )
 
 # ==================== ОСНОВНОЙ ЭКРАН ====================
 st.title("⚡ Единая панель мониторинга (Парковки, ЭЗС, Шохин)")
@@ -104,22 +173,7 @@ with tab_parking:
                             address = cols[7].text.strip() if len(cols) > 7 else ""
                             time_passed_raw = cols[5].text.strip().lower()
 
-                            total_passed_mins = 0
-                            try:
-                                parts = time_passed_raw.split()
-                                val = int(parts[0])
-                                unit = parts[1]
-
-                                if "sec" in unit:
-                                    total_passed_mins = 0.5
-                                elif "min" in unit:
-                                    total_passed_mins = val
-                                elif "hour" in unit:
-                                    total_passed_mins = val * 60
-                                elif "day" in unit:
-                                    total_passed_mins = val * 24 * 60
-                            except Exception:
-                                total_passed_mins = 999999
+                            total_passed_mins = parse_downtime_minutes(time_passed_raw)
 
                             is_archive = False
                             is_offline = False
@@ -142,21 +196,24 @@ with tab_parking:
                                 except Exception:
                                     pass
 
+                            effective_limit = timeout_mins if timeout_mins > 0 else offline_threshold
+
                             if not is_archive:
-                                if (timeout_mins > 0 and total_passed_mins > timeout_mins) or (
-                                    total_passed_mins > 10
-                                ):
+                                if total_passed_mins > effective_limit:
                                     is_offline = True
 
                             if is_archive:
                                 archive_count += 1
                             elif is_offline:
                                 offline_count += 1
+                                # Расчет просрочки ремонта (Лимит — 3 часа)
+                                overdue_status = format_overdue(total_passed_mins, allowed_hours=3)
+                                
                                 offline_stations.append(
                                     {
                                         "ID станции": station_id,
-                                        "Камера / Время простоя": time_passed_raw,
-                                        "Лимит (мин)": timeout_mins,
+                                        "Время простоя": time_passed_raw,
+                                        "Просрочка (лимит 3 ч)": overdue_status,
                                         "Адрес": address if address else "Не указан",
                                     }
                                 )
@@ -244,6 +301,10 @@ with tab_ezs:
                             error_reason = cols[5].text.strip() if cols[5].text.strip() else "—"
                             last_conn = cols[6].text.strip()
 
+                            # Расчет просрочки восстановления (Лимит — 1 час)
+                            last_conn_mins = parse_ezs_last_conn_mins(last_conn)
+                            overdue_status = format_overdue(last_conn_mins, allowed_hours=1)
+
                             ezs_offline_list.append(
                                 {
                                     "ID станции": station_id,
@@ -251,6 +312,7 @@ with tab_ezs:
                                     "Статус": status,
                                     "Причина неисправности": error_reason,
                                     "Последнее подключение": last_conn,
+                                    "Просрочка (лимит 1 ч)": overdue_status,
                                 }
                             )
                 finally:
@@ -306,7 +368,6 @@ with tab_shohin:
                         page.locator('button:has-text("Подробно")').click()
                         page.wait_for_timeout(3000)
 
-                    # Считываем общие метрики со страницы
                     page_text = page.locator("body").inner_text()
                     radar_m = re.search(r"Радар\s+(\d+)/(\d+)", page_text, re.IGNORECASE)
                     chorroha_m = re.search(r"Чорроха.*?\s+(\d+)/(\d+)", page_text, re.IGNORECASE)
@@ -321,7 +382,6 @@ with tab_shohin:
 
                     seen_ips = {}
 
-                    # Цикл сбора с поддержкой страниц/скролла
                     for page_num in range(3):
                         table_rows = page.evaluate(r"""
                           () => {
@@ -389,9 +449,9 @@ with tab_shohin:
                                         "IP-адрес": ip,
                                         "Категория": category,
                                         "Статус": status,
+                                        "Лимит восстановления": "3 часа (Норма)",
                                     }
 
-                        # Пробуем переключить страницу, если есть пагинация
                         next_btn = page.locator(
                             'button:has(.q-icon:has-text("chevron_right")), button.q-pagination__next, [aria-label="Next page"], button:has-text(">")'
                         ).first
